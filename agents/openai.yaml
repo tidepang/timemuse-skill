@@ -1,0 +1,5 @@
+interface:
+  display_name: "TimeMuse Evidence"
+  short_description: "Personal evidence for recall, notes and project discussion"
+policy:
+  allow_implicit_invocation: true
