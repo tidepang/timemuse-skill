@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 VERSION = 1
 TYPES = ('blocks', 'block_notes', 'thoughts', 'reviews', 'todos', 'weekly_contexts', 'activity')
+DEFAULT_TYPES = ','.join(TYPES[:-1])
+MATERIAL_NAMES = dict(zip(TYPES, ('时间块', '时间块备注', '随手想法', '已保存日反馈', 'Todo', 'Project 周目标', '应用活动')))
 DEFAULT_STATE = Path.home() / 'Library/Application Support/TimeMuseSkill/consent.json'
 DEFAULT_DB = Path.home() / 'Library/Application Support/TimeMuse/timemuse.sqlite'
 SCAN_LIMIT = 2000
@@ -50,23 +52,36 @@ def load_consent(path):
         raise EvidenceError('invalid_consent') from None
 
 
+def local_timezone():
+    candidate = os.environ.get('TZ', '').lstrip(':')
+    if not candidate:
+        resolved = str(Path('/etc/localtime').resolve())
+        candidate = resolved.partition('/zoneinfo/')[2]
+    try:
+        ZoneInfo(candidate)
+    except (ValueError, ZoneInfoNotFoundError):
+        raise EvidenceError('timezone_not_detected_use_--timezone') from None
+    return candidate
+
+
+def activation_message(selected):
+    names = '、'.join(MATERIAL_NAMES[kind] for kind in selected)
+    return f'允许 AI 按需读取 TimeMuse 的{names}历史记录吗？相关内容会交给当前 AI 服务处理，原始记录不会被修改。'
+
+
 def setup(args, path):
     selected = material_types(args.types)
-    ZoneInfo(args.timezone)
-    if not sys.stdin.isatty():
-        raise EvidenceError('setup_requires_user_terminal')
-    print('TimeMuse Skill: selected records will be returned to your AI conversation and may', file=sys.stderr)
-    print('be processed by its external AI service. No publishing permission is granted.', file=sys.stderr)
-    print('This grants these material types across history; each query is bounded to 93 days.', file=sys.stderr)
-    print('User prose may itself contain private information. No raw titles/URLs, OCR or images.', file=sys.stderr)
-    print(f'Database: {Path(args.database).expanduser().resolve()}\nProfile: {args.profile}', file=sys.stderr)
-    print(f'Timezone: {args.timezone}\nMaterials: {", ".join(selected)}', file=sys.stderr)
-    print('Type ALLOW TIMEMUSE EVIDENCE to activate, anything else to cancel:', file=sys.stderr)
-    if input().strip() != 'ALLOW TIMEMUSE EVIDENCE':
-        raise EvidenceError('setup_cancelled')
+    timezone = args.timezone or local_timezone()
+    ZoneInfo(timezone)
+    if not args.yes:
+        if not sys.stdin.isatty():
+            raise EvidenceError('setup_requires_confirmation')
+        print(activation_message(selected) + ' [y/N]', file=sys.stderr)
+        if input().strip().lower() not in ('y', 'yes', '是', '允许', 'allow timemuse evidence'):
+            raise EvidenceError('setup_cancelled')
     value = dict(version=VERSION, consent='external_ai_selected_evidence',
                  database=str(Path(args.database).expanduser().resolve()), profile=args.profile,
-                 timezone=args.timezone, types=selected, granted_at=dt.datetime.now(dt.timezone.utc).isoformat())
+                 timezone=timezone, types=selected, granted_at=dt.datetime.now(dt.timezone.utc).isoformat())
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'w') as handle:
@@ -302,11 +317,12 @@ def main():
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('status')
     commands.add_parser('revoke')
-    setup_parser = commands.add_parser('setup', help='User-operated interactive consent; does not read database.')
+    setup_parser = commands.add_parser('setup', help='One-time activation; does not read database.')
     setup_parser.add_argument('--database', default=str(DEFAULT_DB))
     setup_parser.add_argument('--profile', default='local-profile')
-    setup_parser.add_argument('--timezone', required=True)
-    setup_parser.add_argument('--types', required=True)
+    setup_parser.add_argument('--timezone', help='Defaults to the local IANA timezone.')
+    setup_parser.add_argument('--types', default=DEFAULT_TYPES)
+    setup_parser.add_argument('--yes', action='store_true', help='Activate after explicit user approval in the AI conversation.')
     q = commands.add_parser('query')
     q.add_argument('--from', dest='date_from', required=True)
     q.add_argument('--to', dest='date_to', required=True)

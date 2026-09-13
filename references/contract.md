@@ -4,19 +4,24 @@
 
 Python 3.9+ with system IANA timezone data is required. No package installation,
 network, App launch or migrations are needed. Installation is separate from
-activation. From the installed Skill directory the user runs:
+activation. From the installed Skill directory run:
 
 ```sh
-python3 scripts/evidence.py setup --timezone Asia/Shanghai --types blocks,block_notes,thoughts,reviews,todos,weekly_contexts
+python3 scripts/evidence.py setup
 ```
 
-The terminal lists the database, profile, timezone, material classes and external
-AI disclosure, then asks the user to type `ALLOW TIMEMUSE EVIDENCE`. Setup does
-not open the database. It stores only the selected scope and database location
+Setup asks one yes/no question naming the materials and external AI processing.
+An Agent can use `setup --yes` after the user approves that same disclosure in
+the conversation. Installing alone never activates reading. Setup does not open
+the database. It stores only the selected scope and database location
 in `~/Library/Application Support/TimeMuseSkill/consent.json` with mode 0600.
 `--database` overrides the standard `~/Library/Application Support/TimeMuse/timemuse.sqlite`;
-`--profile` defaults to `local-profile`. Choose the app's local timezone; the
-helper does not silently infer it from the machine or read profile settings.
+`--profile` defaults to `local-profile`. The IANA timezone defaults to `TZ`, or
+the `/etc/localtime` zoneinfo link. `--timezone Asia/Shanghai` overrides it;
+an undetectable timezone needs that override, never a guessed fixed UTC offset.
+Default materials are blocks, block_notes, thoughts, reviews, todos and
+weekly_contexts. `--types blocks,block_notes` is an optional narrower scope;
+activity is opt-in. No choice is required for the default installation.
 Consent covers the selected classes across history, not only a single date range.
 An assistant may complete setup only after the user explicitly approves the
 displayed scope and external-AI disclosure; retrieval alone never grants consent.
@@ -26,6 +31,24 @@ use `revoke` to remove consent. Rerun setup for a deliberate scope change. The
 global `--state PATH` option exists for alternate installations and isolated
 fixtures, not to bypass the user's selected scope. Revocation takes effect on
 subsequent queries, not already returned data or an in-flight read.
+
+## Installation And Maintenance
+
+`python3 scripts/install.py` installs into `${CODEX_HOME:-$HOME/.codex}/skills/timemuse-skill`.
+With no terminal it finishes installation and leaves activation pending; an
+interactive terminal offers the one-time confirmation. `--install-only` skips
+activation. An existing valid consent is always preserved, including narrower
+material selections, even when new install flags differ. Use setup explicitly
+to change it. No installation path reads the database.
+
+Repeat the install command to update. Recognized existing installs are backed
+up under the client root's `skill-backups/`; `--update` remains accepted for
+compatibility. Unrecognized directories and symlinks are left unchanged.
+To uninstall, run `revoke`, then remove the installed Skill directory. This does
+not delete TimeMuse records. Consent lives outside the package and must not be
+committed or published. Fixture checks: `python3 -m unittest discover -s tests`.
+
+## Read Boundary
 
 The query helper refuses unconsented material classes before opening SQLite.
 It opens SQLite `mode=ro`, sets `query_only`, uses a read transaction and never

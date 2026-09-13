@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -37,14 +38,18 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(self.run_install('--install-only').returncode, 0)
         (self.target / 'personal.txt').write_text('keep my changes')
         self.consent.parent.mkdir(parents=True)
-        self.consent.write_text('existing consent must not be touched')
-        self.assertNotEqual(self.run_install('--install-only').returncode, 0)
-        result = self.run_install('--install-only', '--update')
+        consent = json.dumps(dict(version=1, consent='external_ai_selected_evidence',
+                                  database=str(self.home/'absent.sqlite'), profile='local-profile',
+                                  timezone='Asia/Shanghai', types=['block_notes']))
+        self.consent.write_text(consent)
+        result = self.run_install('--types', 'blocks,activity', '--timezone', 'America/New_York')
         self.assertEqual(result.returncode, 0, result.stderr)
         backups = list((self.home / '.codex/skill-backups').iterdir())
         self.assertEqual(len(backups), 1)
         self.assertEqual((backups[0] / 'personal.txt').read_text(), 'keep my changes')
-        self.assertEqual(self.consent.read_text(), 'existing consent must not be touched')
+        self.assertEqual(self.consent.read_text(), consent)
+        self.assertIn('已启用，保留原有读取范围', result.stdout)
+        self.assertNotIn('等待一次确认', result.stdout)
 
     def test_unknown_directory_and_symlink_are_never_replaced(self):
         self.target.mkdir(parents=True)
@@ -59,7 +64,9 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(self.target.is_symlink())
 
     def test_noninteractive_install_cannot_activate_reading(self):
-        result = self.run_install('--timezone', 'Asia/Shanghai')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(self.target.exists())
+        result = self.run_install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.target.exists())
         self.assertFalse(self.consent.exists())
+        self.assertIn('等待一次确认', result.stdout)
+        self.assertIn('setup --yes', result.stdout)

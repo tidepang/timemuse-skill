@@ -3,6 +3,7 @@ import datetime as dt
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -86,15 +87,40 @@ class EvidenceTests(unittest.TestCase):
 
     def test_interactive_setup_disclosure_and_no_database_read(self):
         args = type('Args', (), dict(types='blocks,thoughts', timezone='Asia/Shanghai',
-                                    database=str(self.root/'absent.sqlite'), profile='local-profile'))
-        with patch.object(sys.stdin, 'isatty', return_value=True), patch('builtins.input', return_value='ALLOW TIMEMUSE EVIDENCE'), contextlib.redirect_stderr(io.StringIO()) as disclosure:
+                                    database=str(self.root/'absent.sqlite'), profile='local-profile', yes=False))
+        with patch.object(sys.stdin, 'isatty', return_value=True), patch('builtins.input', return_value='y'), contextlib.redirect_stderr(io.StringIO()) as disclosure:
             e.setup(args, self.state)
-        self.assertIn('external AI', disclosure.getvalue())
+        self.assertIn('当前 AI 服务处理', disclosure.getvalue())
+        self.assertIn('时间块、随手想法', disclosure.getvalue())
         self.assertEqual(self.state.stat().st_mode & 0o777, 0o600)
         self.assertEqual(e.load_consent(self.state)['types'], ['blocks','thoughts'])
         with patch.object(sys.stdin, 'isatty', return_value=False):
-            with self.assertRaisesRegex(e.EvidenceError, 'user_terminal'):
+            with self.assertRaisesRegex(e.EvidenceError, 'requires_confirmation'):
                 e.setup(args, self.state)
+        before = self.state.read_bytes()
+        with patch.object(sys.stdin, 'isatty', return_value=True), patch('builtins.input', return_value='n'), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(e.EvidenceError, 'setup_cancelled'):
+                e.setup(args, self.state)
+        self.assertEqual(self.state.read_bytes(), before)
+
+    def test_explicit_confirmation_uses_defaults_without_database_read(self):
+        with patch.dict(os.environ, {'TZ': 'Asia/Shanghai'}):
+            process, result = self.cli('setup', '--yes', '--database', str(self.root/'absent.sqlite'))
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertTrue(result['active'])
+        consent = e.load_consent(self.state)
+        self.assertEqual(consent['types'], list(e.TYPES[:-1]))
+        self.assertEqual(consent['timezone'], 'Asia/Shanghai')
+        self.assertFalse((self.root/'absent.sqlite').exists())
+
+    def test_local_timezone_uses_iana_zone_and_rejects_unknown(self):
+        with patch.dict(os.environ, {'TZ': ''}), patch.object(Path, 'resolve', return_value=Path('/var/db/timezone/zoneinfo/Asia/Shanghai')):
+            self.assertEqual(e.local_timezone(), 'Asia/Shanghai')
+        with patch.dict(os.environ, {'TZ': 'America/New_York'}):
+            self.assertEqual(e.local_timezone(), 'America/New_York')
+        with patch.dict(os.environ, {'TZ': 'Not/AZone'}):
+            with self.assertRaisesRegex(e.EvidenceError, 'timezone_not_detected'):
+                e.local_timezone()
 
     def test_day_clipping_split_allocation_and_privacy(self):
         result = self.run_query('blocks,block_notes,activity')
