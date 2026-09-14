@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install this reviewed local package; never download code or read TimeMuse data."""
+"""Install and configure TimeMuse Skill without reading TimeMuse data."""
 import argparse
 import datetime as dt
 import os
@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from evidence import DEFAULT_STATE, DEFAULT_TYPES, EvidenceError, activation_message, load_consent, material_types
+from evidence import DEFAULT_STATE, DEFAULT_TYPES, EvidenceError, load_consent, material_types
 
 FILES = ('SKILL.md', 'agents/openai.yaml', 'references/contract.md',
          'scripts/evidence.py', 'scripts/install.py', 'README.md')
@@ -21,7 +21,7 @@ def main():
     parser.add_argument('--install-only', action='store_true', help='Do not activate reading.')
     parser.add_argument('--update', action='store_true', help='Compatibility flag; existing installs are always backed up.')
     args = parser.parse_args()
-    selected = material_types(args.types)
+    material_types(args.types)
     root = Path(__file__).resolve().parents[1]
     for name in FILES:
         source = root / name
@@ -65,18 +65,17 @@ def main():
     print('如客户端尚未发现 Skill，请新建一个对话。')
     try:
         load_consent(DEFAULT_STATE)
-    except EvidenceError:
-        pass
+    except EvidenceError as error:
+        if str(error) == 'reading_disabled':
+            print('已更新，保留停用状态。重新启用请运行 evidence.py setup。')
+            return 0
+        if str(error) != 'configuration_required_run_setup':
+            raise
     else:
         print('已启用，保留原有读取范围。')
         return 0
     if args.install_only:
         print('已安装，尚未启用读取。')
-        return 0
-    if not sys.stdin.isatty():
-        print('已安装，等待一次确认：' + activation_message(selected))
-        print(f'得到用户同意后，运行：{sys.executable} "{target / "scripts/evidence.py"}" setup --yes'
-              + (f' --timezone {args.timezone}' if args.timezone else '') + f' --types {args.types}')
         return 0
     command = [sys.executable, str(target / 'scripts/evidence.py'), 'setup', '--types', args.types]
     if args.timezone:

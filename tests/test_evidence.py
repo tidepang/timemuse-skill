@@ -1,7 +1,5 @@
-import contextlib
 import datetime as dt
 import importlib.util
-import io
 import json
 import os
 from pathlib import Path
@@ -71,39 +69,39 @@ class EvidenceTests(unittest.TestCase):
                                  text=True, capture_output=True)
         return process, json.loads(process.stdout)
 
-    def test_consent_denial_before_missing_database_and_revoke(self):
+    def test_missing_configuration_and_persistent_revoke(self):
         self.state.unlink()
         process, result = self.cli('query', '--from', '2026-09-01', '--to', '2026-09-01', '--types', 'blocks')
-        self.assertEqual(result['error'], 'consent_required')
+        self.assertEqual(result['error'], 'configuration_required_run_setup')
         self.assertEqual(process.returncode, 1)
         self.state.write_text(json.dumps(self.consent))
         self.assertFalse(self.cli('revoke')[1]['active'])
-        self.assertFalse(self.state.exists())
+        self.assertEqual(json.loads(self.state.read_text()), dict(version=1, enabled=False))
+        self.assertFalse(self.cli('status')[1]['active'])
+        self.assertEqual(self.cli('query', '--from', '2026-09-01', '--to', '2026-09-01', '--types', 'blocks')[1]['error'], 'reading_disabled')
+        self.assertTrue(self.cli('setup', '--timezone', 'Asia/Shanghai')[1]['active'])
 
     def test_material_allowlist_denies_before_open(self):
         self.consent.update(types=['blocks'], database='/not/a/database')
-        with self.assertRaisesRegex(e.EvidenceError, 'materials_not_authorized'):
+        with self.assertRaisesRegex(e.EvidenceError, 'materials_not_enabled'):
             self.run_query('block_notes')
 
-    def test_interactive_setup_disclosure_and_no_database_read(self):
+    def test_invalid_configuration_is_reported_without_overwrite(self):
+        self.state.write_text('[]')
+        process, result = self.cli('status')
+        self.assertEqual(process.returncode, 1)
+        self.assertEqual(result['error'], 'invalid_configuration')
+        self.assertEqual(self.state.read_text(), '[]')
+
+    def test_setup_without_input_or_database_read(self):
         args = type('Args', (), dict(types='blocks,thoughts', timezone='Asia/Shanghai',
                                     database=str(self.root/'absent.sqlite'), profile='local-profile', yes=False))
-        with patch.object(sys.stdin, 'isatty', return_value=True), patch('builtins.input', return_value='y'), contextlib.redirect_stderr(io.StringIO()) as disclosure:
+        with patch('builtins.input', side_effect=AssertionError('must not prompt')), patch.object(sqlite3, 'connect', side_effect=AssertionError('must not open database')):
             e.setup(args, self.state)
-        self.assertIn('当前 AI 服务处理', disclosure.getvalue())
-        self.assertIn('时间块、随手想法', disclosure.getvalue())
         self.assertEqual(self.state.stat().st_mode & 0o777, 0o600)
         self.assertEqual(e.load_consent(self.state)['types'], ['blocks','thoughts'])
-        with patch.object(sys.stdin, 'isatty', return_value=False):
-            with self.assertRaisesRegex(e.EvidenceError, 'requires_confirmation'):
-                e.setup(args, self.state)
-        before = self.state.read_bytes()
-        with patch.object(sys.stdin, 'isatty', return_value=True), patch('builtins.input', return_value='n'), contextlib.redirect_stderr(io.StringIO()):
-            with self.assertRaisesRegex(e.EvidenceError, 'setup_cancelled'):
-                e.setup(args, self.state)
-        self.assertEqual(self.state.read_bytes(), before)
 
-    def test_explicit_confirmation_uses_defaults_without_database_read(self):
+    def test_legacy_yes_flag_uses_defaults_without_database_read(self):
         with patch.dict(os.environ, {'TZ': 'Asia/Shanghai'}):
             process, result = self.cli('setup', '--yes', '--database', str(self.root/'absent.sqlite'))
         self.assertEqual(process.returncode, 0, process.stderr)

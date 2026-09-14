@@ -1,19 +1,18 @@
 # Evidence Contract v1
 
-## Activation
+## Configuration
 
 Python 3.9+ with system IANA timezone data is required. No package installation,
-network, App launch or migrations are needed. Installation is separate from
-activation. From the installed Skill directory run:
+network, App launch or migrations are needed by the query helper. Installation
+configures defaults automatically. To change settings or resume disabled reading,
+run from the installed Skill directory:
 
 ```sh
 python3 scripts/evidence.py setup
 ```
 
-Setup asks one yes/no question naming the materials and external AI processing.
-An Agent can use `setup --yes` after the user approves that same disclosure in
-the conversation. Installing alone never activates reading. Setup does not open
-the database. It stores only the selected scope and database location
+Setup runs without interaction or an additional approval step; `--yes` remains
+accepted for compatibility. It does not open the database. It stores configuration
 in `~/Library/Application Support/TimeMuseSkill/consent.json` with mode 0600.
 `--database` overrides the standard `~/Library/Application Support/TimeMuse/timemuse.sqlite`;
 `--profile` defaults to `local-profile`. The IANA timezone defaults to `TZ`, or
@@ -22,12 +21,11 @@ an undetectable timezone needs that override, never a guessed fixed UTC offset.
 Default materials are blocks, block_notes, thoughts, reviews, todos and
 weekly_contexts. `--types blocks,block_notes` is an optional narrower scope;
 activity is opt-in. No choice is required for the default installation.
-Consent covers the selected classes across history, not only a single date range.
-An assistant may complete setup only after the user explicitly approves the
-displayed scope and external-AI disclosure; retrieval alone never grants consent.
+These settings apply across history, not only a single date range. Host access
+controls still apply; the Skill does not introduce its own authorization process.
 
 Use `status` to inspect active material classes/timezone without reading records;
-use `revoke` to remove consent. Rerun setup for a deliberate scope change. The
+use `revoke` to persist a disabled state. Rerun setup for a deliberate scope change. The
 global `--state PATH` option exists for alternate installations and isolated
 fixtures, not to bypass the user's selected scope. Revocation takes effect on
 subsequent queries, not already returned data or an in-flight read.
@@ -35,22 +33,24 @@ subsequent queries, not already returned data or an in-flight read.
 ## Installation And Maintenance
 
 `python3 scripts/install.py` installs into `${CODEX_HOME:-$HOME/.codex}/skills/timemuse-skill`.
-With no terminal it finishes installation and leaves activation pending; an
-interactive terminal offers the one-time confirmation. `--install-only` skips
-activation. An existing valid consent is always preserved, including narrower
+The default command installs and configures reading, including without a terminal.
+`--install-only` skips configuration on a fresh install. Existing configuration
+is always preserved, including disabled reading and narrower
 material selections, even when new install flags differ. Use setup explicitly
-to change it. No installation path reads the database.
+to change it. Older installations without configuration receive defaults on
+update; legacy consent files remain supported unchanged. No installation path
+reads the database.
 
 Repeat the install command to update. Recognized existing installs are backed
 up under the client root's `skill-backups/`; `--update` remains accepted for
 compatibility. Unrecognized directories and symlinks are left unchanged.
 To uninstall, run `revoke`, then remove the installed Skill directory. This does
-not delete TimeMuse records. Consent lives outside the package and must not be
+not delete TimeMuse records. Configuration lives outside the package and must not be
 committed or published. Fixture checks: `python3 -m unittest discover -s tests`.
 
 ## Read Boundary
 
-The query helper refuses unconsented material classes before opening SQLite.
+The query helper checks configured material classes before opening SQLite.
 It opens SQLite `mode=ro`, sets `query_only`, uses a read transaction and never
 runs schema migrations. Normal WAL reading is supported; do not use immutable
 mode on an active database. SQLite may require accessible WAL/shared-memory
@@ -68,11 +68,11 @@ boundary, not OS isolation from other programs that can already read the files.
 | `reviews` | Saved Daily Review progress/signal text and provided flags at the review's Evidence Day; not drafts or reconstructed original text |
 | `todos` | Current title/note/state and day/week address; intent, even when current state is completed |
 | `weekly_contexts` | Current Project goal and time reference at a Monday calendar-week address; intent, not a grade |
-| `activity` | App name/bundle, event type and interval only; optional separately authorized class, no window/browser title, URL or metadata |
+| `activity` | App name/bundle, event type and interval only; optional material setting, no window/browser title, URL or metadata |
 
 No screenshots, OCR, Muse conversations, raw title/URL columns, JSON metadata
 dump or nested recoverable blocks are returned. User-authored prose can contain
-sensitive text or URLs typed by the user; material consent is not automatic
+sensitive text or URLs typed by the user; material selection is not automatic
 content anonymization. Unsupported materials are enumerated in every response.
 
 ## Query Semantics

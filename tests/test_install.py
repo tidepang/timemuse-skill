@@ -15,7 +15,7 @@ class InstallerTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.home = Path(self.directory.name)
-        self.env = dict(os.environ, HOME=str(self.home), CODEX_HOME=str(self.home / '.codex'))
+        self.env = dict(os.environ, HOME=str(self.home), CODEX_HOME=str(self.home / '.codex'), TZ='Asia/Shanghai')
         self.target = self.home / '.codex/skills/timemuse-skill'
         self.consent = self.home / 'Library/Application Support/TimeMuseSkill/consent.json'
 
@@ -32,7 +32,7 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((self.home / 'Library/Application Support/TimeMuse').exists())
         status = subprocess.run([sys.executable, str(self.target / 'scripts/evidence.py'), 'status'],
                                 env=self.env, capture_output=True, text=True)
-        self.assertIn('consent_required', status.stdout)
+        self.assertIn('configuration_required_run_setup', status.stdout)
 
     def test_update_preserves_previous_files_and_consent(self):
         self.assertEqual(self.run_install('--install-only').returncode, 0)
@@ -63,10 +63,33 @@ class InstallerTests(unittest.TestCase):
         self.assertNotEqual(self.run_install('--install-only', '--update').returncode, 0)
         self.assertTrue(self.target.is_symlink())
 
-    def test_noninteractive_install_cannot_activate_reading(self):
+    def test_noninteractive_install_configures_reading_without_database(self):
         result = self.run_install()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.target.exists())
+        config = json.loads(self.consent.read_text())
+        self.assertTrue(config['enabled'])
+        self.assertEqual(config['types'], ['blocks', 'block_notes', 'thoughts', 'reviews', 'todos', 'weekly_contexts'])
+        self.assertEqual(config['timezone'], 'Asia/Shanghai')
+        self.assertFalse((self.home / 'Library/Application Support/TimeMuse').exists())
+        status = subprocess.run([sys.executable, str(self.target / 'scripts/evidence.py'), 'status'],
+                                env=self.env, capture_output=True, text=True)
+        self.assertTrue(json.loads(status.stdout)['active'])
+
+    def test_old_unconfigured_install_gets_defaults_on_update(self):
+        self.assertEqual(self.run_install('--install-only').returncode, 0)
         self.assertFalse(self.consent.exists())
-        self.assertIn('等待一次确认', result.stdout)
-        self.assertIn('setup --yes', result.stdout)
+        self.assertEqual(self.run_install().returncode, 0)
+        self.assertTrue(json.loads(self.consent.read_text())['enabled'])
+
+    def test_revoke_survives_update_until_explicit_setup(self):
+        self.assertEqual(self.run_install().returncode, 0)
+        helper = [sys.executable, str(self.target / 'scripts/evidence.py')]
+        revoked = subprocess.run(helper + ['revoke'], env=self.env, capture_output=True, text=True)
+        self.assertEqual(revoked.returncode, 0, revoked.stderr)
+        disabled = self.consent.read_bytes()
+        self.assertEqual(self.run_install().returncode, 0)
+        self.assertEqual(self.consent.read_bytes(), disabled)
+        resumed = subprocess.run(helper + ['setup'], env=self.env, input='', capture_output=True, text=True)
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertTrue(json.loads(self.consent.read_text())['enabled'])

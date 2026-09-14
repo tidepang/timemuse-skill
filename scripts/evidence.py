@@ -13,7 +13,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 VERSION = 1
 TYPES = ('blocks', 'block_notes', 'thoughts', 'reviews', 'todos', 'weekly_contexts', 'activity')
 DEFAULT_TYPES = ','.join(TYPES[:-1])
-MATERIAL_NAMES = dict(zip(TYPES, ('时间块', '时间块备注', '随手想法', '已保存日反馈', 'Todo', 'Project 周目标', '应用活动')))
 DEFAULT_STATE = Path.home() / 'Library/Application Support/TimeMuseSkill/consent.json'
 DEFAULT_DB = Path.home() / 'Library/Application Support/TimeMuse/timemuse.sqlite'
 SCAN_LIMIT = 2000
@@ -37,10 +36,15 @@ def material_types(value):
 
 def load_consent(path):
     if not path.exists():
-        raise EvidenceError('consent_required')
+        raise EvidenceError('configuration_required_run_setup')
     try:
         value = json.loads(path.read_text())
-        if (value['version'] != VERSION or value['consent'] != 'external_ai_selected_evidence'
+        if not isinstance(value, dict):
+            raise ValueError()
+        if value.get('version') == VERSION and value.get('enabled') is False:
+            raise EvidenceError('reading_disabled')
+        if (value['version'] != VERSION
+                or not (value.get('enabled') is True or value.get('consent') == 'external_ai_selected_evidence')
                 or not isinstance(value['database'], str) or not Path(value['database']).is_absolute()
                 or not isinstance(value['profile'], str) or not value['profile']
                 or not isinstance(value['types'], list)
@@ -49,7 +53,7 @@ def load_consent(path):
         ZoneInfo(value['timezone'])
         return value
     except (ValueError, KeyError, TypeError, ZoneInfoNotFoundError):
-        raise EvidenceError('invalid_consent') from None
+        raise EvidenceError('invalid_configuration') from None
 
 
 def local_timezone():
@@ -64,29 +68,22 @@ def local_timezone():
     return candidate
 
 
-def activation_message(selected):
-    names = '、'.join(MATERIAL_NAMES[kind] for kind in selected)
-    return f'允许 AI 按需读取 TimeMuse 的{names}历史记录吗？相关内容会交给当前 AI 服务处理，原始记录不会被修改。'
+def write_state(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        json.dump(value, handle)
 
 
 def setup(args, path):
     selected = material_types(args.types)
     timezone = args.timezone or local_timezone()
     ZoneInfo(timezone)
-    if not args.yes:
-        if not sys.stdin.isatty():
-            raise EvidenceError('setup_requires_confirmation')
-        print(activation_message(selected) + ' [y/N]', file=sys.stderr)
-        if input().strip().lower() not in ('y', 'yes', '是', '允许', 'allow timemuse evidence'):
-            raise EvidenceError('setup_cancelled')
-    value = dict(version=VERSION, consent='external_ai_selected_evidence',
+    value = dict(version=VERSION, enabled=True,
                  database=str(Path(args.database).expanduser().resolve()), profile=args.profile,
-                 timezone=timezone, types=selected, granted_at=dt.datetime.now(dt.timezone.utc).isoformat())
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, 'w') as handle:
-        os.fchmod(handle.fileno(), 0o600)
-        json.dump(value, handle)
+                 timezone=timezone, types=selected, configured_at=dt.datetime.now(dt.timezone.utc).isoformat())
+    write_state(path, value)
     return dict(version=VERSION, active=True, types=selected)
 
 
@@ -124,7 +121,7 @@ def interval(row, start_col, end_col, begin, finish):
 def query(args, consent):
     kinds = material_types(args.types)
     if not set(kinds) <= set(consent['types']):
-        raise EvidenceError('materials_not_authorized')
+        raise EvidenceError('materials_not_enabled')
     first, last = day(args.date_from), day(args.date_to)
     if not 0 <= (last-first).days < 93 or not 1 <= args.limit <= 200:
         raise EvidenceError('invalid_query_bounds')
@@ -313,16 +310,16 @@ def retrieve(db, args, consent, kinds, first, last, begin, finish):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--state', type=Path, default=DEFAULT_STATE, help='Consent file (isolated fixtures or alternate installation).')
+    parser.add_argument('--state', type=Path, default=DEFAULT_STATE, help='Configuration file (isolated fixtures or alternate installation).')
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('status')
     commands.add_parser('revoke')
-    setup_parser = commands.add_parser('setup', help='One-time activation; does not read database.')
+    setup_parser = commands.add_parser('setup', help='Configure reading defaults; does not read database.')
     setup_parser.add_argument('--database', default=str(DEFAULT_DB))
     setup_parser.add_argument('--profile', default='local-profile')
     setup_parser.add_argument('--timezone', help='Defaults to the local IANA timezone.')
     setup_parser.add_argument('--types', default=DEFAULT_TYPES)
-    setup_parser.add_argument('--yes', action='store_true', help='Activate after explicit user approval in the AI conversation.')
+    setup_parser.add_argument('--yes', action='store_true', help='Accepted for compatibility; setup needs no confirmation.')
     q = commands.add_parser('query')
     q.add_argument('--from', dest='date_from', required=True)
     q.add_argument('--to', dest='date_to', required=True)
@@ -333,7 +330,7 @@ def main():
     args = parser.parse_args()
     try:
         if args.command == 'revoke':
-            args.state.unlink(missing_ok=True)
+            write_state(args.state, dict(version=VERSION, enabled=False))
             result = dict(version=VERSION, active=False)
         elif args.command == 'setup':
             result = setup(args, args.state)
@@ -344,6 +341,9 @@ def main():
         emit(result)
         return 0
     except EvidenceError as error:
+        if args.command == 'status' and str(error) == 'reading_disabled':
+            emit(dict(version=VERSION, active=False))
+            return 0
         emit(dict(version=VERSION, error=str(error)))
     except (sqlite3.Error, OSError):
         emit(dict(version=VERSION, error='local_read_or_state_failure'))
